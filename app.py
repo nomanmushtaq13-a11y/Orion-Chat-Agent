@@ -86,15 +86,24 @@ def supabase_query(table, params):
     return []
 
 
-def save_message(conversation_id, role, content, platform, project_id=None):
-    supabase_save("messages", {
+def save_message(conversation_id, role, content, platform, project_id=None, intent=None):
+    data = {
         "conversation_id": conversation_id,
         "role": role,
         "content": content,
-        "platform": platform,
         "project_id": str(project_id) if project_id else None,
         "created_at": datetime.now(timezone.utc).isoformat(),
-    })
+    }
+    # Only add platform/intent if the columns exist (graceful degradation)
+    try:
+        test = requests.get(f"{SUPABASE_URL}/rest/v1/messages", headers=SUPABASE_HEADERS, params={"limit": 1}, timeout=5)
+        if test.status_code == 200:
+            data["platform"] = platform
+            if intent:
+                data["intent"] = intent
+    except:
+        pass
+    supabase_save("messages", data)
 
 
 def get_history(conversation_id, limit=10):
@@ -170,8 +179,8 @@ def handle_freelancer_message(thread_id, message_text, sender_id, project_id=Non
 
     reply = generate_response(message_text, intent, history_text)
 
-    save_message(conversation_id, "client", message_text, "freelancer", project_id)
-    save_message(conversation_id, "agent", reply, "freelancer", project_id)
+    save_message(conversation_id, "client", message_text, "freelancer", project_id, intent)
+    save_message(conversation_id, "agent", reply, "freelancer", project_id, intent)
 
     # Send reply to Freelancer
     try:
@@ -297,8 +306,8 @@ def api_message():
 
     reply = generate_response(message_text, intent, history_text)
 
-    save_message(conversation_id, "client", message_text, platform, project_id)
-    save_message(conversation_id, "agent", reply, platform, project_id)
+    save_message(conversation_id, "client", message_text, platform, project_id, intent)
+    save_message(conversation_id, "agent", reply, platform, project_id, intent)
 
     return jsonify({
         "reply": reply,
