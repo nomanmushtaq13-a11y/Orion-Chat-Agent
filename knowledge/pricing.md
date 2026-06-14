@@ -1,27 +1,42 @@
 # Pricing
 
+Honest pricing, no hidden fees.
+
 ## Content Writing
-- Blog Articles (1000 words): ₹2000-5000 INR ($25-60 USD)
-- YouTube Scripts (10-15 min): ₹3000-8000 INR ($35-95 USD)
-- Website Content (per page): ₹1500-4000 INR ($18-48 USD)
-- Product Descriptions (per 10): ₹1000-3000 INR ($12-36 USD)
+
+| Service | Price Range |
+|---------|------------|
+| Blog Article (1000 words) | ₹2000-5000 / $25-60 |
+| YouTube Script (10-15 min) | ₹3000-8000 / $35-95 |
+| Website Content (per page) | ₹1500-4000 / $18-48 |
+| 10 Product Descriptions | ₹1000-3000 / $12-36 |
 
 ## AI & Automation
-- n8n Workflow Setup: ₹5000-15000 INR ($60-180 USD)
-- AI Content Pipeline: ₹8000-20000 INR ($95-240 USD)
-- Automation Consulting: ₹2000/hr INR ($24/hr USD)
+
+| Service | Price |
+|---------|-------|
+| n8n Workflow Setup | ₹5000-15000 / $60-180 |
+| AI Content Pipeline | ₹8000-20000 / $95-240 |
+| Automation Consulting | ₹2000/hr / $24/hr |
 
 ## Research
-- Market Research Report: ₹5000-12000 INR ($60-145 USD)
-- SEO Keyword Research: ₹2000-5000 INR ($24-60 USD)
 
-## Packages
-- Starter (5 blog posts): ₹8000 INR ($95 USD)
-- Growth (10 articles + 5 scripts): ₹15000 INR ($180 USD)
-- Enterprise (custom scope): Contact for quote
+| Service | Price |
+|---------|-------|
+| Market Research Report | ₹5000-12000 / $60-145 |
+| SEO Keyword Research | ₹2000-5000 / $24-60 |
 
-# Payment Terms
-- 50% upfront, 50% on delivery (for projects over ₹5000)
-- Full upfront for smaller projects
-- Payments via Freelancer.com escrow or direct bank transfer
-- Accepted currencies: INR, USD
+## Packages (Best Value)
+
+- **Starter Pack** — 5 blog posts: ₹8000 / $95
+- **Growth Pack** — 10 articles + 5 scripts: ₹15000 / $180
+- **Enterprise** — Custom scope: Let's talk
+
+## Payment Terms
+
+- Projects under ₹5000: Full upfront (simple and quick).
+- Projects over ₹5000: 50% to start, 50% on delivery.
+- I work through Freelancer escrow for safety, or direct bank transfer if we've worked before.
+- I accept INR and USD.
+
+If your budget doesn't exactly match my pricing, tell me what you're working with. I'm flexible.

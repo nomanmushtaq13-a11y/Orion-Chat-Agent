@@ -3,5 +3,4 @@ __pycache__/
 .env
 *.egg-info/
 dist/
-_setup.sql
 _*.py
