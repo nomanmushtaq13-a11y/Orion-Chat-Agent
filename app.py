@@ -166,6 +166,45 @@ def generic_fallback(intent):
     return responses.get(intent, "Thanks for reaching out. I'll get back to you shortly.")
 
 
+# ─── Email Connector ───────────────────────────────────────
+from connectors_email import check_email, send_email, EMAIL_ENABLED, EMAIL_ADDRESS, responded_email_ids
+
+responded_email_subjects = set()
+
+def handle_email_message(email_data):
+    """Process and respond to an email message."""
+    thread_key = email_data["thread_key"]
+    conversation_id = hashlib.md5(("email:" + thread_key).encode()).hexdigest()
+
+    history = get_history(conversation_id)
+    history_text = "\n".join([f"{m['role']}: {m['content'][:200]}" for m in history[-5:]])
+    intent = classify_intent(email_data["body"], history_text)
+
+    reply = generate_response(email_data["body"], intent, history_text)
+
+    save_message(conversation_id, "client", email_data["body"], "email", None, intent)
+    save_message(conversation_id, "agent", reply, "email", None, intent)
+
+    reply_subject = email_data["subject"]
+    if not reply_subject.lower().startswith("re:"):
+        reply_subject = "Re: " + reply_subject
+
+    success = send_email(
+        to_addr=email_data["sender_email"],
+        subject=reply_subject,
+        body=reply,
+        in_reply_to=email_data.get("message_id"),
+    )
+
+    return {
+        "conversation_id": conversation_id,
+        "intent": intent,
+        "reply": reply,
+        "success": success,
+        "to": email_data["sender_email"],
+        "subject": reply_subject,
+    }
+
 # ─── Platform Connectors ──────────────────────────────────
 
 def handle_freelancer_message(thread_id, message_text, sender_id, project_id=None):
@@ -219,6 +258,7 @@ def health():
         "groq": bool(GROQ_API_KEY),
         "freelancer_token": bool(ACCESS_TOKEN),
         "supabase": bool(SUPABASE_URL and SUPABASE_KEY),
+        "email": EMAIL_ENABLED,
         "knowledge_files": len(search_knowledge("").split("\n")) if search_knowledge("") else 0,
     })
 
@@ -287,6 +327,29 @@ def poll():
     return jsonify({"checked": len(threads), "replied": len(results), "results": results})
 
 
+@app.route("/poll/email", methods=["GET"])
+def poll_email():
+    """Poll Gmail inbox for new client emails."""
+    if not EMAIL_ENABLED:
+        return jsonify({"error": "email_disabled", "checked": 0, "replied": 0})
+
+    emails = check_email()
+    results = []
+    for em in emails:
+        if em["uid"] in responded_email_ids:
+            continue
+        thread_key = em["thread_key"]
+        if thread_key in responded_email_subjects:
+            continue
+        result = handle_email_message(em)
+        if result:
+            responded_email_ids.add(em["uid"])
+            responded_email_subjects.add(thread_key)
+            results.append(result)
+
+    return jsonify({"checked": len(emails), "replied": len(results), "results": results})
+
+
 @app.route("/api/message", methods=["POST"])
 def api_message():
     """Generic API endpoint for sending messages (for web widget, test, etc.)"""
@@ -319,57 +382,190 @@ def api_message():
 
 @app.route("/dashboard")
 def dashboard():
-    """Simple conversation dashboard."""
-    conversations = supabase_query("messages", {
-        "select": "conversation_id,platform,count=conversation_id",
-        "order": "created_at.desc",
-        "limit": 50,
-    })
+    """Multi-page ORION Command Center dashboard."""
     html = """<!DOCTYPE html>
 <html lang="en">
-<head><meta charset="UTF-8"><title>ORION Chat Dashboard</title>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ORION Command Center</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&family=Orbitron:wght@400;700&display=swap" rel="stylesheet">
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
-body{font-family:Inter,sans-serif;background:#0b1919;color:#e0e0e0;padding:20px}
-h1{color:#39AEA9;font-family:Orbitron,sans-serif;margin-bottom:20px}
-.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:15px;margin-bottom:30px}
-.stat-card{background:#0f2424;padding:15px;border-radius:8px;border:1px solid #1a3a3a}
-.stat-card .num{font-size:28px;color:#39AEA9;font-weight:700}
-.stat-card .label{font-size:12px;color:#6b9e9e;margin-top:4px}
-table{width:100%;border-collapse:collapse;background:#0f2424;border-radius:8px;overflow:hidden}
-th{text-align:left;padding:10px 12px;color:#6b9e9e;font-size:12px;border-bottom:1px solid #1a3a3a}
-td{padding:10px 12px;border-bottom:1px solid #1a3a3a;font-size:14px}
+body{font-family:Inter,sans-serif;background:#0b1919;color:#c8d8d8;min-height:100vh}
+.nav{display:flex;gap:0;background:#0f2424;border-bottom:1px solid #1a3a3a;padding:0 20px;position:sticky;top:0;z-index:100}
+.nav a{padding:16px 24px;color:#6b9e9e;text-decoration:none;font-size:13px;font-weight:500;letter-spacing:0.5px;border-bottom:2px solid transparent;transition:all .2s}
+.nav a:hover{color:#39AEA9;background:#132929}
+.nav a.active{color:#39AEA9;border-bottom-color:#39AEA9}
+.nav .brand{font-family:Orbitron,sans-serif;font-size:16px;color:#39AEA9;padding:16px 24px 16px 0;margin-right:auto;font-weight:700}
+.main{padding:24px;max-width:1400px;margin:0 auto}
+.page{display:none}
+.page.active{display:block}
+h1{font-family:Orbitron,sans-serif;color:#39AEA9;font-size:22px;margin-bottom:20px;font-weight:400}
+h2{color:#e0e0e0;font-size:15px;margin-bottom:12px;font-weight:500}
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:24px}
+.stat-card{background:#0f2424;padding:16px;border-radius:8px;border:1px solid #1a3a3a;transition:border-color .2s}
+.stat-card:hover{border-color:#39AEA9}
+.stat-card .num{font-size:30px;color:#39AEA9;font-weight:700;font-family:Orbitron,sans-serif}
+.stat-card .label{font-size:11px;color:#6b9e9e;margin-top:4px;text-transform:uppercase;letter-spacing:1px}
+.stat-card .sub{font-size:12px;color:#4a7a7a;margin-top:2px}
+.card{background:#0f2424;border-radius:8px;border:1px solid #1a3a3a;padding:16px;margin-bottom:16px}
+.card h3{color:#39AEA9;font-size:13px;margin-bottom:10px;text-transform:uppercase;letter-spacing:1px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;padding:8px 10px;color:#6b9e9e;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;border-bottom:1px solid #1a3a3a;font-weight:500}
+td{padding:8px 10px;border-bottom:1px solid #1a3a3a}
 tr:hover{background:#132929}
-.platform-tag{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;background:#1a3a3a}
-.platform-freelancer{background:#1a3a3a;color:#39AEA9}
-.platform-email{background:#3a1a3a;color:#A95EAE}
-.platform-whatsapp{background:#1a3a1a;color:#5EAE5E}
-</style></head>
+.badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:500;text-transform:uppercase}
+.badge-fl{background:#1a3a3a;color:#39AEA9}
+.badge-em{background:#3a1a3a;color:#A95EAE}
+.badge-wa{background:#1a3a1a;color:#5EAE5E}
+.badge-api{background:#3a3a1a;color:#AEAE5E}
+.badge-sent{background:#1a2a3a;color:#5e8eae}
+.badge-replied{background:#1a3a2a;color:#5eae8e}
+.badge-won{background:#1a3a1a;color:#5ece5e}
+.badge-lost{background:#3a1a1a;color:#ce5e5e}
+.empty{color:#4a7a7a;font-size:13px;padding:20px;text-align:center}
+.loading{color:#4a7a7a;font-size:13px;padding:20px;text-align:center}
+.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media(max-width:800px){.grid-2{grid-template-columns:1fr}}
+</style>
+</head>
 <body>
-<h1>ORION Chat Dashboard</h1>
-<div class="stats" id="stats">Loading...</div>
-<table>
-<thead><tr><th>Conversation</th><th>Platform</th><th>Last Activity</th><th>Messages</th></tr></thead>
-<tbody id="conversations">Loading...</tbody>
-</table>
+<div class="nav">
+  <div class="brand">ORION</div>
+  <a href="#" class="active" data-page="overview">Overview</a>
+  <a href="#" data-page="freelancing">Freelancing</a>
+  <a href="#" data-page="chat">Chat Log</a>
+  <a href="#" data-page="settings">Settings</a>
+</div>
+<div class="main">
+
+<div id="page-overview" class="page active">
+  <h1>Command Center</h1>
+  <div class="stats-grid" id="ov-stats"></div>
+  <div class="grid-2">
+    <div class="card">
+      <h3>Recent Conversations</h3>
+      <table><thead><tr><th>ID</th><th>Platform</th><th>Messages</th><th>Last</th></tr></thead><tbody id="ov-convos"></tbody></table>
+    </div>
+    <div class="card">
+      <h3>Platform Distribution</h3>
+      <div id="ov-platforms"></div>
+    </div>
+  </div>
+</div>
+
+<div id="page-freelancing" class="page">
+  <h1>Freelancing Center</h1>
+  <div class="stats-grid" id="fl-stats"></div>
+  <div class="card">
+    <h3>Bid History</h3>
+    <table><thead><tr><th>Project</th><th>Amount</th><th>Status</th><th>Date</th></tr></thead><tbody id="fl-bids"></tbody></table>
+  </div>
+</div>
+
+<div id="page-chat" class="page">
+  <h1>Conversation Log</h1>
+  <div class="card">
+    <table><thead><tr><th>Conversation ID</th><th>Platform</th><th>Role</th><th>Content</th><th>Intent</th><th>Time</th></tr></thead><tbody id="chat-rows"></tbody></table>
+  </div>
+</div>
+
+<div id="page-settings" class="page">
+  <h1>System Settings</h1>
+  <div class="stats-grid" id="set-stats"></div>
+</div>
+
+</div>
 <script>
-async function load(){
-  const r=await fetch('/api/conversations');
-  const d=await r.json();
-  let stats='<div class="stat-card"><div class="num">'+d.total+'</div><div class="label">Total Messages</div></div>'+
-    '<div class="stat-card"><div class="num">'+d.conversations+'</div><div class="label">Conversations</div></div>'+
-    '<div class="stat-card"><div class="num">'+d.platforms.freelancer+'</div><div class="label">Freelancer</div></div>'+
-    '<div class="stat-card"><div class="num">'+d.platforms.email+'</div><div class="label">Email</div></div>'+
-    '<div class="stat-card"><div class="num">'+d.platforms.whatsapp+'</div><div class="label">WhatsApp</div></div>';
-  document.getElementById('stats').innerHTML=stats;
+const API={base:'/api'};
+async function getJSON(url){const r=await fetch(url);return r.json()}
+
+function esc(s){const d=document.createElement('div');d.textContent=s||'';return d.innerHTML}
+
+// Overview
+async function loadOverview(){
+  const d=await getJSON('/api/conversations');
+  const total=d.total||0, convos=d.conversations||0, plats=d.platforms||{};
+  document.getElementById('ov-stats').innerHTML=
+    '<div class="stat-card"><div class="num">'+total+'</div><div class="label">Total Messages</div></div>'+
+    '<div class="stat-card"><div class="num">'+convos+'</div><div class="label">Conversations</div></div>'+
+    '<div class="stat-card"><div class="num">'+(plats.freelancer||0)+'</div><div class="label">Freelancer</div></div>'+
+    '<div class="stat-card"><div class="num">'+(plats.email||0)+'</div><div class="label">Email</div></div>'+
+    '<div class="stat-card"><div class="num">'+(plats.whatsapp||0)+'</div><div class="label">WhatsApp</div></div>'+
+    '<div class="stat-card"><div class="num">'+(plats.api||0)+'</div><div class="label">API</div></div>';
+  const recent=d.recent||[];
   let rows='';
-  for(const c of d.recent){
-    rows+='<tr><td>'+c.conversation_id.substr(0,12)+'...</td><td><span class="platform-tag platform-'+c.platform+'">'+c.platform+'</span></td><td>'+c.last_message+'</td><td>'+c.count+'</td></tr>';
+  for(const c of recent){
+    const platClass={freelancer:'badge-fl',email:'badge-em',whatsapp:'badge-wa',api:'badge-api'}[c.platform]||'badge-api';
+    rows+='<tr><td>'+esc(c.conversation_id).substr(0,12)+'...</td><td><span class="badge '+platClass+'">'+esc(c.platform)+'</span></td><td>'+c.count+'</td><td>'+esc((c.last_message||'').substr(0,19))+'</td></tr>';
   }
-  document.getElementById('conversations').innerHTML=rows;
+  document.getElementById('ov-convos').innerHTML=rows||'<tr><td colspan="4" class="empty">No conversations yet</td></tr>';
+  let platHtml='';
+  const colors={freelancer:'#39AEA9',email:'#A95EAE',whatsapp:'#5EAE5E',api:'#AEAE5E'};
+  for(const [k,v] of Object.entries(plats)){
+    if(total>0){const pct=Math.round(v/total*100);platHtml+='<div style="margin-bottom:8px"><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:2px"><span>'+k+'</span><span>'+v+' ('+pct+'%)</span></div><div style="background:#1a3a3a;height:6px;border-radius:3px;overflow:hidden"><div style="width:'+pct+'%;height:100%;background:'+(colors[k]||'#39AEA9')+';border-radius:3px"></div></div></div>';}
+  }
+  document.getElementById('ov-platforms').innerHTML=platHtml||'<div class="empty">No data</div>';
 }
-load();
-setInterval(load,30000);
+
+// Freelancing
+async function loadFreelancing(){
+  let bids=[];
+  try{const r=await fetch('/api/freelancer/bids');if(r.ok){const d=await r.json();bids=d.bids||[]}}catch(e){}
+  document.getElementById('fl-stats').innerHTML=
+    '<div class="stat-card"><div class="num">'+bids.length+'</div><div class="label">Total Bids</div></div>'+
+    '<div class="stat-card"><div class="num">'+bids.filter(b=>b.status==='won').length+'</div><div class="label">Won</div></div>'+
+    '<div class="stat-card"><div class="num">'+(bids.reduce((s,b)=>s+(parseFloat(b.amount)||0),0).toFixed(0))+'</div><div class="label">Total Bid (INR)</div></div>'+
+    '<div class="stat-card"><div class="num">'+bids.filter(b=>b.status==='active'||b.status==='sent').length+'</div><div class="label">Active</div></div>';
+  let rows='';
+  for(const b of bids){
+    const cls='badge-'+(b.status||'sent');
+    rows+='<tr><td>'+esc(b.project_title||b.project_id||'?')+'</td><td>'+esc((b.currency||'INR')+' '+(parseFloat(b.amount)||0))+'</td><td><span class="badge '+cls+'">'+esc(b.status||'sent')+'</span></td><td>'+esc((b.date||b.timestamp||'').substr(0,10))+'</td></tr>';
+  }
+  document.getElementById('fl-bids').innerHTML=rows||'<tr><td colspan="4" class="empty">No bids placed yet</td></tr>';
+}
+
+// Chat log
+async function loadChat(){
+  const d=await getJSON('/api/conversations?limit=200');
+  const items=d.conversation_list||[];
+  let rows='';
+  for(const m of items){
+    const platClass={freelancer:'badge-fl',email:'badge-em',whatsapp:'badge-wa',api:'badge-api'}[m.platform]||'badge-api';
+    rows+='<tr><td>'+esc(m.conversation_id).substr(0,10)+'</td><td><span class="badge '+platClass+'">'+esc(m.platform)+'</span></td><td>'+esc(m.role)+'</td><td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(m.content).substr(0,80)+'</td><td>'+esc(m.intent||'-')+'</td><td>'+esc((m.created_at||'').substr(0,19))+'</td></tr>';
+  }
+  document.getElementById('chat-rows').innerHTML=rows||'<tr><td colspan="6" class="empty">No messages yet</td></tr>';
+}
+
+// Settings
+async function loadSettings(){
+  const h=await getJSON('/health');
+  document.getElementById('set-stats').innerHTML=
+    '<div class="stat-card"><div class="num" style="color:'+(h.groq?'#39AEA9':'#ce5e5e')+'">'+(h.groq?'ON':'OFF')+'</div><div class="label">Groq AI Engine</div></div>'+
+    '<div class="stat-card"><div class="num" style="color:'+(h.freelancer_token?'#39AEA9':'#ce5e5e')+'">'+(h.freelancer_token?'ON':'OFF')+'</div><div class="label">Freelancer API</div></div>'+
+    '<div class="stat-card"><div class="num" style="color:'+(h.supabase?'#39AEA9':'#ce5e5e')+'">'+(h.supabase?'ON':'OFF')+'</div><div class="label">Supabase DB</div></div>'+
+    '<div class="stat-card"><div class="num" style="color:'+(h.email?'#39AEA9':'#ce5e5e')+'">'+(h.email?'ON':'OFF')+'</div><div class="label">Email Connector</div></div>'+
+    '<div class="stat-card"><div class="num">'+(h.knowledge_files||0)+'</div><div class="label">Knowledge Files</div></div>'+
+    '<div class="stat-card"><div class="num" style="color:#39AEA9">OK</div><div class="label">System Status</div></div>';
+}
+
+// Navigation
+document.querySelectorAll('.nav a[data-page]').forEach(a=>{
+  a.addEventListener('click',function(e){
+    e.preventDefault();
+    document.querySelectorAll('.nav a').forEach(x=>x.classList.remove('active'));
+    this.classList.add('active');
+    document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+    const pg=document.getElementById('page-'+this.dataset.page);
+    if(pg){pg.classList.add('active')}
+  });
+});
+
+// Init
+loadOverview();loadFreelancing();loadChat();loadSettings();
+setInterval(loadOverview,30000);
 </script>
 </body></html>"""
     return render_template_string(html)
@@ -377,11 +573,11 @@ setInterval(load,30000);
 
 @app.route("/api/conversations")
 def api_conversations():
-    """Get conversation stats for dashboard."""
+    """Get conversation stats and full message list for dashboard."""
     rows = supabase_query("messages", {
         "select": "*",
         "order": "created_at.desc",
-        "limit": 100,
+        "limit": 200,
     })
 
     platforms = {"freelancer": 0, "email": 0, "whatsapp": 0, "api": 0}
@@ -400,7 +596,20 @@ def api_conversations():
         "conversations": len(convos),
         "platforms": platforms,
         "recent": [{"conversation_id": cid, **v} for cid, v in recent],
+        "conversation_list": rows,
     })
+
+
+@app.route("/api/freelancer/bids")
+def api_freelancer_bids():
+    """Get bid history from bids_tracker.json."""
+    bids_path = os.path.join(os.path.dirname(__file__), "..", "LIVE_DATA", "bids_tracker.json")
+    try:
+        with open(bids_path) as f:
+            data = json.load(f)
+        return jsonify({"bids": data if isinstance(data, list) else data.get("bids", [])})
+    except:
+        return jsonify({"bids": []})
 
 
 if __name__ == "__main__":
